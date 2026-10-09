@@ -264,8 +264,18 @@ final class ToolbarView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        paint()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        paint()
+    }
+
+    private func paint() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.backgroundColor = (dark ? NSColor(white: 0.14, alpha: 1) : NSColor(calibratedWhite: 0.96, alpha: 1)).cgColor
     }
 
     @available(*, unavailable)
@@ -624,6 +634,7 @@ final class TabButton: NSView, NSDraggingSource {
     let index: Int
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
+    private let selected: Bool
     private let title = NSTextField(labelWithString: "")
     private let dot = NSView()
     private let close = NSButton()
@@ -632,6 +643,7 @@ final class TabButton: NSView, NSDraggingSource {
         self.documentID = document.id
         self.group = group
         self.index = index
+        self.selected = selected
         super.init(frame: NSRect(x: 0, y: 0, width: 140, height: 26))
         wantsLayer = true
         layer?.cornerRadius = 6
@@ -667,14 +679,38 @@ final class TabButton: NSView, NSDraggingSource {
             close.centerYAnchor.constraint(equalTo: centerYAnchor),
             close.widthAnchor.constraint(equalToConstant: 14)
         ])
-        layer?.backgroundColor = (selected ? NSColor.controlBackgroundColor : NSColor.black.withAlphaComponent(0.06)).cgColor
-        layer?.borderWidth = selected ? 1 : 0
-        layer?.borderColor = NSColor.separatorColor.cgColor
         toolTip = document.path?.path ?? document.name
+        paint()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        paint()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        paint()
+    }
+
+    private func paint() {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let fill: NSColor
+        if selected {
+            fill = dark ? NSColor(white: 0.30, alpha: 1) : .white
+        } else {
+            fill = dark ? NSColor.white.withAlphaComponent(0.06) : NSColor.black.withAlphaComponent(0.06)
+        }
+        layer?.backgroundColor = fill.cgColor
+        layer?.borderWidth = selected ? 1 : 0
+        layer?.borderColor = (dark ? NSColor(white: 0.42, alpha: 1) : NSColor(white: 0.78, alpha: 1)).cgColor
+        let text = dark ? NSColor(white: 0.92, alpha: 1) : NSColor(white: 0.15, alpha: 1)
+        title.textColor = text
+        close.contentTintColor = text
+    }
 
     func setDirty(_ dirty: Bool) { dot.isHidden = !dirty }
 
