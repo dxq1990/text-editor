@@ -522,8 +522,8 @@ final class ColumnView: NSView {
     }
 
     override func layout() {
-        super.layout()
         applyPreviewLayout(document: currentDocument())
+        super.layout()
         guard !inLiveResize else { return }
         hosts.values.forEach {
             $0.scrollView.tile()
@@ -533,6 +533,7 @@ final class ColumnView: NSView {
 
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
+        layoutSubtreeIfNeeded()
         hosts.values.forEach {
             $0.scrollView.tile()
             $0.updateWrapWidth(wordWrap: model?.wordWrap)

@@ -421,8 +421,21 @@ private func newlineCount(_ text: NSString, upTo location: Int) -> Int {
     return count
 }
 
+final class EditorSurface: NSView {
+    var onWidthChange: (() -> Void)?
+    private var appliedWidth: CGFloat = -1
+
+    override func layout() {
+        super.layout()
+        let width = bounds.width
+        guard width > 1, abs(width - appliedWidth) > 0.5 else { return }
+        appliedWidth = width
+        onWidthChange?()
+    }
+}
+
 final class EditorHost: NSObject, NSTextViewDelegate {
-    let container = NSView()
+    let container = EditorSurface()
     let gutter = LineNumberGutter()
     let scrollView = NSScrollView()
     let textView: NSTextView
@@ -440,6 +453,8 @@ final class EditorHost: NSObject, NSTextViewDelegate {
     private var measuredWidth: CGFloat = -1
     private var measuredColumns = 0
     private var measuredLines = 0
+    private var appliedClipWidth: CGFloat = -1
+    private var fittingWidth = false
     private var gutterWidthConstraint: NSLayoutConstraint?
     private var scrollSyncWork: DispatchWorkItem?
     private var suppressScrollSync = false
@@ -540,6 +555,9 @@ final class EditorHost: NSObject, NSTextViewDelegate {
         editor.layoutManager?.delegate = watcher
         layoutWatcher = watcher
         NotificationCenter.default.addObserver(self, selector: #selector(redrawRuler), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
+        container.onWidthChange = { [weak self] in
+            self?.updateWrapWidth()
+        }
         model.registerEditor(group: group, id: document.id, view: editor)
         apply(wordWrap: model.wordWrap, theme: model.theme)
         Highlighter.apply(storage: document.buffer.storage, language: document.language)
@@ -575,12 +593,18 @@ final class EditorHost: NSObject, NSTextViewDelegate {
     }
 
     func updateWrapWidth(wordWrap: Bool? = nil) {
+        guard !fittingWidth else { return }
         guard let container = textView.textContainer, let layoutManager = textView.layoutManager else { return }
         guard !textView.hasMarkedText() else { return }
         if (textView as? PlainTextView)?.isCommittingPinyin == true { return }
+        fittingWidth = true
+        defer { fittingWidth = false }
         updateGutterWidth()
         let gutterWidth = gutterWidthConstraint?.constant ?? gutter.bounds.width
-        let visibleWidth = max(scrollView.bounds.width, self.container.bounds.width - gutterWidth)
+        scrollView.tile()
+        let paneWidth = self.container.bounds.width - gutterWidth
+        let clipWidth = scrollView.contentSize.width
+        let visibleWidth = max(clipWidth, paneWidth)
         let visibleHeight = max(scrollView.bounds.height, self.container.bounds.height)
         guard visibleWidth > 1, visibleHeight > 1 else { return }
         let wrap = wordWrap ?? container.widthTracksTextView
@@ -589,6 +613,7 @@ final class EditorHost: NSObject, NSTextViewDelegate {
         let repairing = textView.frame.width < 1 || textView.frame.height < 1
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
+        textView.autoresizingMask = wrap ? [.width] : []
         textView.minSize = NSSize(width: visibleWidth, height: visibleHeight)
         textView.maxSize = NSSize(
             width: wrap ? visibleWidth : CGFloat.greatestFiniteMagnitude,
@@ -597,7 +622,6 @@ final class EditorHost: NSObject, NSTextViewDelegate {
         if textView.frame.width < visibleWidth { textView.frame.size.width = visibleWidth }
         if textView.frame.height < visibleHeight { textView.frame.size.height = visibleHeight }
         if repairing { textView.frame.origin = .zero }
-        scrollView.tile()
         container.widthTracksTextView = wrap
         if document.buffer.storage.length >= Syntax.largeFileLimit {
             layoutLarge(
@@ -726,6 +750,14 @@ final class EditorHost: NSObject, NSTextViewDelegate {
     @objc func redrawRuler() {
         gutter.needsDisplay = true
         scheduleScrollSync()
+        guard !fittingWidth else { return }
+        let width = scrollView.contentView.bounds.width
+        guard width > 1, abs(width - appliedClipWidth) > 0.5 else { return }
+        guard !textView.hasMarkedText() else { return }
+        fittingWidth = true
+        appliedClipWidth = width
+        updateWrapWidth()
+        fittingWidth = false
     }
 
     func firstVisibleLine() -> Int {

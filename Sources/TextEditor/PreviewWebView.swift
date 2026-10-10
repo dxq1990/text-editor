@@ -120,7 +120,7 @@ private func previewShell(baseURL: URL?) -> String {
       :root[data-theme="dark"] { color-scheme: dark; --bg: #1d1c1a; --fg: #ece7df; --muted: #b2ab9f; --line: #3a372f; --code: rgba(255,255,255,0.08); --link: #8fbf9f; }
       html, body { margin: 0; background: var(--bg); color: var(--fg); }
       body { font: 16px/1.65 -apple-system, "PingFang SC", "Hiragino Sans GB", sans-serif; }
-      article { box-sizing: border-box; width: 100%; max-width: 760px; margin: 0 auto; padding: 20px 18px 64px; }
+      article { box-sizing: border-box; width: 100%; padding: 20px 28px 64px; }
       h1, h2, h3, h4, p, li, blockquote { overflow-wrap: break-word; }
       h1, h2, h3, h4 { line-height: 1.35; margin: 1.1em 0 0.45em; }
       p, ul, ol, pre, table, blockquote { margin: 0.7em 0; }
