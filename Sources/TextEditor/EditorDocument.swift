@@ -19,6 +19,8 @@ final class EditorDocument: ObservableObject, Identifiable {
     @Published var showPreview: Bool
     @Published var revision = 0
     var mtime: Date?
+    /// 上次与磁盘一致时的正文。为空表示这份内容本来就还没保存。
+    private var cleanBaseline: String?
 
     var text: String { buffer.storage.string }
     var bookmarks: [Int] = [] {
@@ -34,10 +36,26 @@ final class EditorDocument: ObservableObject, Identifiable {
         self.showPreview = false
         buffer.owner = self
         buffer.replace(text, resetUndo: true)
+        markClean()
+    }
+
+    func markClean() {
+        cleanBaseline = text
+        dirty = false
+    }
+
+    /// 当前正文本来就和磁盘不一致，撤销回打开时的内容仍然要保存。
+    func discardCleanBaseline() {
+        cleanBaseline = nil
+        dirty = true
     }
 
     func markEdited() {
-        if !dirty { dirty = true }
+        if buffer.isApplyingUndo {
+            reconcileUndo()
+        } else if !dirty {
+            dirty = true
+        }
         revision += 1
         let count = buffer.lineCount
         let filtered = bookmarks.filter { $0 >= 1 && $0 <= count }
@@ -46,6 +64,15 @@ final class EditorDocument: ObservableObject, Identifiable {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .editorEdited, object: editedID)
         }
+    }
+
+    func noteUndoRedo() {
+        reconcileUndo()
+    }
+
+    private func reconcileUndo() {
+        guard let cleanBaseline else { return }
+        dirty = text != cleanBaseline
     }
 
     func adjustBookmarks(range: NSRange, replacement: String) {
@@ -79,6 +106,13 @@ final class DocumentBuffer: NSObject, NSTextStorageDelegate {
     weak var owner: EditorDocument?
     private var suppressDepth = 0
     var font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+
+    var isApplyingUndo: Bool {
+        storage.layoutManagers.contains { manager in
+            guard let undo = manager.firstTextView?.undoManager else { return false }
+            return undo.isUndoing || undo.isRedoing
+        }
+    }
     private var lineStarts: [Int] = [0]
     private var lineStartsValid = false
 

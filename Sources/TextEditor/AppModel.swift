@@ -57,6 +57,18 @@ final class AppModel: ObservableObject {
         ) { [weak self] _ in
             self?.scheduleWorkspaceSave()
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(undoStateChanged), name: Notification.Name("NSUndoManagerDidUndoChangeNotification"), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(undoStateChanged), name: Notification.Name("NSUndoManagerDidRedoChangeNotification"), object: nil)
+    }
+
+    @objc private func undoStateChanged() {
+        for document in documents.values {
+            let before = document.dirty
+            document.noteUndoRedo()
+            if document.dirty != before {
+                NotificationCenter.default.post(name: .editorEdited, object: document.id)
+            }
+        }
     }
 
     func activeDocument() -> EditorDocument? { activeDocument(in: activeGroup) }
@@ -329,7 +341,6 @@ final class AppModel: ObservableObject {
             alert.addButton(withTitle: "取消")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             document.encoding = encoding
-            document.dirty = true
             touch()
             return
         }
@@ -340,7 +351,7 @@ final class AppModel: ObservableObject {
             document.mtime = modificationDate(path)
             document.bookmarks = []
             document.buffer.replace(decoded.text, resetUndo: true)
-            document.dirty = false
+            document.markClean()
             touch()
         } catch {
             alert("无法按该编码重新读取", describe(error))
@@ -584,7 +595,7 @@ final class AppModel: ObservableObject {
             document.path = url
             document.name = url.lastPathComponent
             document.mtime = modificationDate(url)
-            document.dirty = false
+            document.markClean()
             if updateLanguage {
                 document.language = Language.from(url: url)
                 Highlighter.apply(storage: document.buffer.storage, language: document.language)
@@ -735,7 +746,7 @@ final class AppModel: ObservableObject {
                 eol: eol,
                 language: language
             )
-            document.dirty = dirty
+            if dirty { document.discardCleanBaseline() }
             document.bookmarks = file.bookmarks
             document.showPreview = file.showPreview ?? (language == .markdown)
             if let path { document.mtime = modificationDate(path) }
@@ -873,7 +884,7 @@ final class AppModel: ObservableObject {
             close(id: document.id, discardChanges: true)
         } else {
             missingConfirmed.insert(document.id)
-            document.dirty = true
+            document.discardCleanBaseline()
             touch()
         }
         flushPendingMissing()
