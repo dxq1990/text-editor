@@ -190,6 +190,16 @@ final class PlainTextView: NSTextView {
         }
         super.insertText(insertString, replacementRange: replacementRange)
     }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onTextChange?()
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        onTextChange?()
+    }
 }
 
 final class LayoutWatcher: NSObject, NSLayoutManagerDelegate {
@@ -278,17 +288,18 @@ final class LineNumberGutter: NSView {
             convert(NSPoint(x: 0, y: containerY + textView.textContainerOrigin.y), from: textView).y
         }
         let expected = large ? max(1, reportedLineCount) : (length == 0 ? 1 : 1 + newlineCount(string, upTo: string.length))
-        if marked || textView.layoutManager == nil {
+        guard let layoutManager = textView.layoutManager else {
             let step = cachedStep > 1 ? cachedStep : max(textFont.ascender - textFont.descender + textFont.leading, 1)
             drawLogicalLines(expected: expected, anchor: gutterY(0), step: step, attributes: attributes)
             return
         }
-        guard let layoutManager = textView.layoutManager else { return }
         var step = max(layoutManager.defaultLineHeight(for: textFont), 1)
         var anchor = gutterY(0)
         if large {
             if length > 0 {
-                layoutManager.ensureLayout(forCharacterRange: NSRange(location: 0, length: 1))
+                if !marked {
+                    layoutManager.ensureLayout(forCharacterRange: NSRange(location: 0, length: 1))
+                }
                 let rect = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil, withoutAdditionalLayout: true)
                 if rect.height > 1, rect.height < step * 2.5 {
                     step = rect.height
@@ -300,7 +311,7 @@ final class LineNumberGutter: NSView {
             return
         }
         if layoutManager.numberOfGlyphs > 0 {
-            let rect = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
+            let rect = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil, withoutAdditionalLayout: marked)
             if rect.height > 1, rect.height < step * 2.5 {
                 step = rect.height
                 anchor = gutterY(rect.minY)
@@ -309,7 +320,32 @@ final class LineNumberGutter: NSView {
         cachedStep = step
         let wrapping = textView.textContainer?.widthTracksTextView == true
         if !wrapping {
-            drawLogicalLines(expected: expected, anchor: anchor, step: step, attributes: attributes)
+            // 不换行时也按每个逻辑行首个行片定位，避免中文行高与默认行高不一致时错位。
+            var drawn: Set<Int> = []
+            let glyphs = NSRange(location: 0, length: layoutManager.numberOfGlyphs)
+            if glyphs.length > 0 {
+                layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, glyphRange, _ in
+                    let charIndex = layoutManager.characterIndexForGlyph(at: glyphRange.location)
+                    guard charIndex < string.length else { return }
+                    let lineChar = string.lineRange(for: NSRange(location: charIndex, length: 0))
+                    guard charIndex == lineChar.location else { return }
+                    let line = 1 + newlineCount(string, upTo: charIndex)
+                    guard line <= expected else { return }
+                    let y = gutterY(rect.minY)
+                    if y > -rect.height && y < self.bounds.height {
+                        drawn.insert(line)
+                        self.drawNumber("\(line)", top: y, height: rect.height, attributes: attributes)
+                    }
+                }
+            }
+            if string.length == 0 || (string.length > 0 && string.character(at: string.length - 1) == 10 && !drawn.contains(expected)) {
+                let extra = layoutManager.extraLineFragmentRect
+                let y = extra.height > 0 ? gutterY(extra.minY) : (drawn.isEmpty ? gutterY(0) : gutterY(0) + CGFloat(expected - 1) * step)
+                let height = extra.height > 0 ? extra.height : step
+                if y > -height && y < bounds.height {
+                    drawNumber("\(expected)", top: y, height: height, attributes: attributes)
+                }
+            }
             return
         }
         var drawn: Set<Int> = []
@@ -319,7 +355,8 @@ final class LineNumberGutter: NSView {
                 let charIndex = layoutManager.characterIndexForGlyph(at: glyphRange.location)
                 guard charIndex < string.length else { return }
                 let lineChar = string.lineRange(for: NSRange(location: charIndex, length: 0))
-                guard charIndex <= lineChar.location else { return }
+                // 软换行续行不画号，只在逻辑行首个行片上画。
+                guard charIndex == lineChar.location else { return }
                 let line = 1 + newlineCount(string, upTo: charIndex)
                 guard line <= expected else { return }
                 let y = gutterY(rect.minY)
@@ -329,7 +366,7 @@ final class LineNumberGutter: NSView {
                 }
             }
         }
-        if string.length > 0, string.character(at: string.length - 1) == 10, !drawn.contains(expected) {
+        if string.length == 0 || (string.length > 0 && string.character(at: string.length - 1) == 10 && !drawn.contains(expected)) {
             let extra = layoutManager.extraLineFragmentRect
             let y = extra.height > 0 ? gutterY(extra.minY) : gutterY(0) + CGFloat(expected - 1) * step
             let height = extra.height > 0 ? extra.height : step
