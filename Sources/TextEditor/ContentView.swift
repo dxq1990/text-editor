@@ -753,10 +753,12 @@ final class FindPanelController: NSObject, NSWindowDelegate {
         super.init()
         panel.contentView = bar
         panel.title = "查找"
-        panel.isFloatingPanel = true
+        // 作为主窗的子窗口，跟主窗一起被遮挡/最小化，不要用 floating 盖住其他应用。
+        panel.isFloatingPanel = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.level = .floating
+        panel.level = .normal
+        panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.becomesKeyOnlyIfNeeded = false
         panel.delegate = self
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -777,20 +779,23 @@ final class FindPanelController: NSObject, NSWindowDelegate {
         panel.title = replace ? "替换" : "查找"
         let height: CGFloat = replace ? 152 : 116
         panel.setContentSize(NSSize(width: 400, height: height))
-        if let parent = panel.parent {
-            parent.removeChildWindow(panel)
-        }
+        attach(to: window)
         let opening = !panel.isVisible
         let focusNow = model.findFocus != lastFocus
         lastFocus = model.findFocus
+        placeInWindow(window)
         if opening || focusNow {
             panel.makeKeyAndOrderFront(nil)
-            placeInWindow(window)
             bar.focus()
-        } else if !panel.isVisible {
+        } else {
             panel.orderFront(nil)
-            placeInWindow(window)
         }
+    }
+
+    private func attach(to window: NSWindow) {
+        if panel.parent === window { return }
+        panel.parent?.removeChildWindow(panel)
+        window.addChildWindow(panel, ordered: .above)
     }
 
     private func placeInWindow(_ window: NSWindow) {
