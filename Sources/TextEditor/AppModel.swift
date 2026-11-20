@@ -301,6 +301,23 @@ final class AppModel: ObservableObject {
         touch()
     }
 
+    /// 预览页直接改内容时回写正文；短暂忽略预览重渲染，避免打断光标。
+    func applyPreviewMarkdown(_ markdown: String) {
+        guard let document = activeDocument(), document.language == .markdown else { return }
+        let next = markdown
+        guard document.text != next else { return }
+        if let view = activeTextView() {
+            let range = NSRange(location: 0, length: (view.string as NSString).length)
+            guard view.shouldChangeText(in: range, replacementString: next) else { return }
+            view.replaceCharacters(in: range, with: next)
+            view.didChangeText()
+        } else {
+            document.buffer.replace(next, resetUndo: false)
+            document.markEdited()
+        }
+        Highlighter.apply(storage: document.buffer.storage, language: document.language)
+    }
+
     func setLanguage(_ language: Language) {
         guard let document = activeDocument() else { return }
         let turningOn = language == .markdown && document.language != .markdown

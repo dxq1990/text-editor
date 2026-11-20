@@ -12,6 +12,7 @@ final class RootView: NSView, AppUI {
     private let findPanel = FindPanelController()
     private var previewToken = UUID()
     private var focusedDocument: UUID?
+    private var focusedPreviewMode = false
 
     init(model: AppModel) {
         self.model = model
@@ -79,9 +80,20 @@ final class RootView: NSView, AppUI {
 
     private func focusActiveEditor() {
         let id = model.groups[model.activeGroup].activeID
-        guard id != focusedDocument else { return }
-        focusedDocument = id
         let column = model.activeGroup == 1 ? right : left
+        let previewMode = id.flatMap { model.documents[$0] }.map { $0.language == .markdown && $0.showPreview } ?? false
+        if model.findOpen {
+            focusedDocument = id
+            focusedPreviewMode = previewMode
+            return
+        }
+        if id == focusedDocument, previewMode == focusedPreviewMode { return }
+        focusedDocument = id
+        focusedPreviewMode = previewMode
+        if previewMode {
+            window?.makeFirstResponder(column.preview.webView)
+            return
+        }
         guard let textView = column.currentTextView else { return }
         window?.makeFirstResponder(textView)
     }
@@ -258,7 +270,7 @@ final class ToolbarView: NSView {
         add("replace", "arrow.left.arrow.right", "替换", #selector(replace))
         row.addArrangedSubview(separator())
         add("wrap", "text.alignleft", "自动换行", #selector(wrap))
-        add("preview", "eye", "Markdown 预览", #selector(preview))
+        add("preview", "doc.richtext", "Markdown 视图", #selector(preview))
         row.addArrangedSubview(NSView())
     }
 
@@ -288,12 +300,15 @@ final class ToolbarView: NSView {
         buttons["find"]?.isEnabled = hasDoc
         buttons["replace"]?.isEnabled = hasDoc
         let markdown = model.activeDocument()?.language == .markdown
+        let previewMode = markdown && (model.activeDocument()?.showPreview ?? false)
         buttons["preview"]?.isEnabled = markdown
-        tint("wrap", model.wordWrap)
-        tint("preview", markdown && (model.activeDocument()?.showPreview ?? false))
+        buttons["wrap"]?.isEnabled = !previewMode
+        tint("wrap", model.wordWrap && !previewMode)
+        tint("preview", previewMode)
+        buttons["preview"]?.toolTip = previewMode ? "切换到源码编辑" : "切换到预览编辑"
         buttons["preview"]?.image = NSImage(
-            systemSymbolName: (model.activeDocument()?.showPreview ?? false) ? "eye.fill" : "eye",
-            accessibilityDescription: "Markdown 预览"
+            systemSymbolName: previewMode ? "chevron.left.forwardslash.chevron.right" : "doc.richtext",
+            accessibilityDescription: buttons["preview"]?.toolTip
         )
     }
 
@@ -360,7 +375,9 @@ final class ColumnView: NSView {
     private var tabButtons: [UUID: TabButton] = [:]
     private let previewSeparator = PreviewSplitter()
     private var previewWidth: NSLayoutConstraint!
+    private var previewFullWidth: NSLayoutConstraint!
     private var separatorWidth: NSLayoutConstraint!
+    private var editorCollapsed: NSLayoutConstraint!
     private var previewFraction: CGFloat = 0.46
 
     init(group: Int) {
@@ -386,9 +403,17 @@ final class ColumnView: NSView {
             addSubview(view)
         }
         let width = preview.webView.widthAnchor.constraint(equalToConstant: 0)
+        let fullWidth = preview.webView.widthAnchor.constraint(equalTo: widthAnchor)
         let separator = previewSeparator.widthAnchor.constraint(equalToConstant: 0)
+        let collapsed = editorStage.widthAnchor.constraint(equalToConstant: 0)
+        fullWidth.isActive = false
+        collapsed.isActive = false
         previewWidth = width
+        previewFullWidth = fullWidth
         separatorWidth = separator
+        editorCollapsed = collapsed
+        preview.webView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        preview.webView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -421,6 +446,13 @@ final class ColumnView: NSView {
         }
         preview.onScrollLine = { [weak self] line in
             self?.scrollEditor(to: line)
+        }
+        preview.onEditMarkdown = { [weak self] markdown in
+            guard let self, let model = self.model, model.activeGroup == self.group else { return }
+            model.applyPreviewMarkdown(markdown)
+        }
+        preview.onSave = { [weak self] in
+            self?.model?.saveActive()
         }
         registerForDraggedTypes([.string, .fileURL])
     }
@@ -478,8 +510,6 @@ final class ColumnView: NSView {
         rebuildTabs(ids: ids, active: active)
         let document = active.flatMap { model.documents[$0] }
         applyPreviewLayout(document: document)
-        empty.isHidden = active != nil
-        editorStage.isHidden = active == nil
     }
 
     func refreshDisplay() {
@@ -522,7 +552,6 @@ final class ColumnView: NSView {
     }
 
     override func layout() {
-        applyPreviewLayout(document: currentDocument())
         super.layout()
         guard !inLiveResize else { return }
         hosts.values.forEach {
@@ -597,16 +626,29 @@ final class ColumnView: NSView {
 
     private func applyPreviewLayout(document: EditorDocument?) {
         guard let model else { return }
-        let show = document?.language == .markdown && document?.showPreview == true && model.activeGroup == group
-        preview.webView.isHidden = !show
-        previewSeparator.isHidden = !show
-        separatorWidth.constant = show ? 6 : 0
-        if show, bounds.width > 2 {
-            let maxPreview = max(160, bounds.width - 220 - 6)
-            let wanted = bounds.width * previewFraction
-            previewWidth.constant = min(max(160, wanted), maxPreview)
+        let previewMode = document?.language == .markdown && document?.showPreview == true && model.activeGroup == group
+        preview.webView.isHidden = !previewMode
+        previewSeparator.isHidden = true
+        if abs(separatorWidth.constant) > 0.01 {
+            separatorWidth.constant = 0
+        }
+        if previewMode {
+            // 用关系约束铺满，避免在 layout 中写入 bounds 宽度导致死循环崩溃。
+            if !editorCollapsed.isActive { editorCollapsed.isActive = true }
+            if previewWidth.isActive { previewWidth.isActive = false }
+            if !previewFullWidth.isActive { previewFullWidth.isActive = true }
+            editorStage.isHidden = true
+            empty.isHidden = true
         } else {
-            previewWidth.constant = 0
+            if editorCollapsed.isActive { editorCollapsed.isActive = false }
+            if previewFullWidth.isActive { previewFullWidth.isActive = false }
+            if !previewWidth.isActive { previewWidth.isActive = true }
+            if abs(previewWidth.constant) > 0.01 {
+                previewWidth.constant = 0
+            }
+            let hasActive = model.groups[group].activeID != nil
+            editorStage.isHidden = !hasActive
+            empty.isHidden = hasActive
         }
         previewSeparator.needsDisplay = true
     }

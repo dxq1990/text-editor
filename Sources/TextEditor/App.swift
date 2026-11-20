@@ -104,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             item("浅色主题", #selector(lightTheme), nil),
             item("深色主题", #selector(darkTheme), nil),
             .separator(),
-            item("Markdown 预览", #selector(togglePreview), nil)
+            item("切换 Markdown 视图", #selector(togglePreview), nil)
         ]))
         let languages = NSMenu()
         for language in Language.allCases {
